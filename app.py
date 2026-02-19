@@ -18,10 +18,10 @@ templates = Jinja2Templates(directory=os.path.join(APP_DIR, "templates"))
 APILAYER_KEY = os.getenv("APILAYER_KEY", "")
 APILAYER_BASE_URL = os.getenv("APILAYER_BASE_URL", "https://api.apilayer.com/exchangerates_data")
 
-# Base de conversion fixée côté serveur (non modifiable dans l'UI)
-BASE_ISO = os.getenv("BASE_ISO", "EUR").strip().upper()
+# Référence fixe : EURO
+REF_ISO = "EUR"
 
-app = FastAPI(title="Parités Jour", version="1.1")
+app = FastAPI(title="Parités Jour", version="1.2")
 
 # Static (optionnel) — ne plante pas si absent
 STATIC_DIR = os.path.join(APP_DIR, "static")
@@ -161,7 +161,7 @@ def _ensure_parites_row_for_target(conn, target_iso: str) -> str:
     """
     iso = _safe_iso(target_iso)
     if iso not in PARITES_DICT:
-        raise HTTPException(status_code=400, detail=f"Devise {iso} non supportée (pas de mapping PARITES_CODE).")
+        raise HTTPException(status_code=400, detail=f"Devise {iso} non supportée.")
 
     lib, code = PARITES_DICT[iso]
 
@@ -173,7 +173,6 @@ def _ensure_parites_row_for_target(conn, target_iso: str) -> str:
         cur.execute("SELECT PARITES_CODE FROM parites WHERE PARITES_CODE=%s LIMIT 1;", (code,))
         if not cur.fetchone():
             raise HTTPException(status_code=500, detail=f"PARITES_CODE {code} introuvable en base.")
-
     return code
 
 def _upsert_parites_jour(conn, rows: List[Dict[str, Any]]):
@@ -188,10 +187,9 @@ def _upsert_parites_jour(conn, rows: List[Dict[str, Any]]):
         cur.executemany(sql, [(r["code"], r["date"], r["rate"], r["rate_div"]) for r in rows])
 
 # =========================
-# Apilayer fetch
+# Apilayer fetch: TARGET -> EUR
 # =========================
 def _get_supported_symbols() -> Dict[str, str]:
-    # /symbols -> filtre selon PARITES_DICT
     data = _apilayer_get("symbols", {})
     symbols = data.get("symbols")
     if not isinstance(symbols, dict):
@@ -203,34 +201,45 @@ def _get_supported_symbols() -> Dict[str, str]:
             out[iso_u] = str(label)
     return out
 
-def _get_latest_rate(base: str, target: str, date_override: Optional[dt.date] = None) -> Dict[dt.date, Decimal]:
+def _get_latest_target_to_eur(target_iso: str, date_override: Optional[dt.date] = None) -> Dict[dt.date, Decimal]:
+    """
+    Retourne {date: taux} où taux = target -> EUR
+    """
+    target = _safe_iso(target_iso)
     if date_override:
-        data = _apilayer_get(date_override.isoformat(), {"base": base, "symbols": target})
+        data = _apilayer_get(date_override.isoformat(), {"base": target, "symbols": REF_ISO})
     else:
-        data = _apilayer_get("latest", {"base": base, "symbols": target})
+        data = _apilayer_get("latest", {"base": target, "symbols": REF_ISO})
 
     rates = data.get("rates", {})
-    if target not in rates:
-        raise HTTPException(status_code=502, detail="Taux absent dans la réponse Apilayer.")
+    if REF_ISO not in rates:
+        raise HTTPException(status_code=502, detail="Taux EUR absent dans la réponse Apilayer.")
     d = data.get("date") or (date_override.isoformat() if date_override else None)
     if not d:
         raise HTTPException(status_code=502, detail="Date absente dans la réponse Apilayer.")
-    return {dt.date.fromisoformat(d): _to_decimal(rates[target])}
+    return {dt.date.fromisoformat(d): _to_decimal(rates[REF_ISO])}
 
-def _get_timeseries_rates(base: str, target: str, start: dt.date, end: dt.date) -> Dict[dt.date, Decimal]:
+def _get_timeseries_target_to_eur(target_iso: str, start: dt.date, end: dt.date) -> Dict[dt.date, Decimal]:
+    """
+    Retourne {date: taux} où taux = target -> EUR
+    """
+    target = _safe_iso(target_iso)
     data = _apilayer_get("timeseries", {
-        "base": base,
-        "symbols": target,
+        "base": target,
+        "symbols": REF_ISO,
         "start_date": start.isoformat(),
         "end_date": end.isoformat(),
     })
+
     rates_by_date = data.get("rates")
     if not isinstance(rates_by_date, dict):
         raise HTTPException(status_code=502, detail="Réponse timeseries inattendue.")
+
     out: Dict[dt.date, Decimal] = {}
     for d_str, rate_obj in rates_by_date.items():
-        if isinstance(rate_obj, dict) and target in rate_obj:
-            out[dt.date.fromisoformat(d_str)] = _to_decimal(rate_obj[target])
+        if isinstance(rate_obj, dict) and REF_ISO in rate_obj:
+            out[dt.date.fromisoformat(d_str)] = _to_decimal(rate_obj[REF_ISO])
+
     if not out:
         raise HTTPException(status_code=502, detail="Aucune parité retournée sur la période.")
     return out
@@ -242,12 +251,12 @@ def _get_timeseries_rates(base: str, target: str, start: dt.date, end: dt.date) 
 def home(request: Request, admin: int = Query(0)):
     return templates.TemplateResponse(
         "index.html",
-        {"request": request, "is_admin_ui": (admin == 1), "base_iso": BASE_ISO},
+        {"request": request, "is_admin_ui": (admin == 1), "ref_iso": REF_ISO},
     )
 
 @app.get("/api/meta")
 def api_meta():
-    return {"base_iso": BASE_ISO, "supported": sorted(list(PARITES_DICT.keys()))}
+    return {"ref_iso": REF_ISO}
 
 @app.get("/api/symbols")
 def api_symbols():
@@ -277,7 +286,7 @@ async def api_import_day(payload: Dict[str, Any]):
     date_s = (payload.get("date") or "").strip()
     date_override = _parse_date(date_s) if date_s else None
 
-    rates = _get_latest_rate(BASE_ISO, target, date_override=date_override)
+    rates = _get_latest_target_to_eur(target, date_override=date_override)
 
     conn = _connect_mysql(db)
     try:
@@ -302,7 +311,7 @@ async def api_import_day(payload: Dict[str, Any]):
     finally:
         conn.close()
 
-    return {"ok": True, "base": BASE_ISO, "target": target, "parites_code": parites_code, "rows": len(rows)}
+    return {"ok": True, "ref": REF_ISO, "target": target, "parites_code": parites_code, "rows": len(rows)}
 
 @app.post("/api/import_range")
 async def api_import_range(payload: Dict[str, Any]):
@@ -313,7 +322,7 @@ async def api_import_range(payload: Dict[str, Any]):
     if end < start:
         raise HTTPException(status_code=400, detail="La date de fin doit être >= date de début.")
 
-    rates = _get_timeseries_rates(BASE_ISO, target, start, end)
+    rates = _get_timeseries_target_to_eur(target, start, end)
 
     conn = _connect_mysql(db)
     try:
@@ -339,12 +348,4 @@ async def api_import_range(payload: Dict[str, Any]):
     finally:
         conn.close()
 
-    return {
-        "ok": True,
-        "base": BASE_ISO,
-        "target": target,
-        "parites_code": parites_code,
-        "rows": len(rows),
-        "from": start.isoformat(),
-        "to": end.isoformat(),
-    }
+    return {"ok": True, "ref": REF_ISO, "target": target, "parites_code": parites_code, "rows": len(rows), "from": start.isoformat(), "to": end.isoformat()}
