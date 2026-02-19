@@ -65,4 +65,231 @@
     }
     button{
       border:none; background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 92%, white 8%), var(--accent));
-      color:#fff; fo
+      color:#fff; font-weight:800; cursor:pointer; -webkit-tap-highlight-color: transparent;
+      transition: transform .12s ease, filter .2s ease;
+    }
+    button:active{transform:scale(.985);filter:brightness(.95)}
+    .row{display:flex;gap:10px;align-items:center}
+    .row > *{flex:1}
+    .divider{height:1px;background:var(--border);margin:14px 0}
+    .result{
+      margin-top:10px; padding:14px; border-radius:16px; border:1px solid var(--border);
+      background: rgba(255,255,255,.10);
+      max-height: 280px; overflow-y:auto; overflow-x:hidden;
+      white-space: pre-wrap; overflow-wrap: break-word; word-break: break-word;
+      -webkit-overflow-scrolling: touch;
+    }
+    .result.fade{animation:pop .26s cubic-bezier(.2,.8,.2,1)}
+    @keyframes pop{from{opacity:.65;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+    .toast{
+      position:fixed; left:50%; bottom:calc(env(safe-area-inset-bottom) + 14px);
+      transform:translateX(-50%) translateY(20px); opacity:0;
+      padding:10px 12px; border-radius:999px; background:rgba(0,0,0,.70); color:#fff; font-size:13px;
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      transition:220ms cubic-bezier(.2,.8,.2,1); pointer-events:none;
+    }
+    .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <h1>Parités Jour</h1>
+      <div class="sub">Taux : Devise → EUR</div>
+      <div class="pill">Référence: <b id="refIso">—</b></div>
+    </div>
+
+    <div class="card">
+      {% if is_admin_ui %}
+        <div class="label">Connexion MySQL</div>
+        <div class="grid">
+          <input id="db_host" placeholder="Serveur (host)" autocomplete="off">
+          <input id="db_port" placeholder="Port (3306)" inputmode="numeric" autocomplete="off">
+          <input id="db_user" placeholder="Utilisateur" autocomplete="off">
+          <input id="db_pass" placeholder="Mot de passe" type="password" autocomplete="off">
+          <input id="db_name" placeholder="Base (ex: prod_commun)" autocomplete="off">
+          <div></div>
+        </div>
+        <button style="margin-top:10px" onclick="ensureSchema()">Créer/Mettre à jour le schéma</button>
+        <div class="divider"></div>
+      {% endif %}
+
+      <div class="label">Devise à importer</div>
+      <div class="row">
+        <select id="target"></select>
+        <button onclick="importDay()">Importer (jour)</button>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="label">Import du jour</div>
+      <div class="row">
+        <input id="day" placeholder="YYYY-MM-DD (optionnel)" autocomplete="off">
+        <button onclick="importDay()">Importer</button>
+      </div>
+
+      <div class="label">Import sur période</div>
+      <div class="row">
+        <input id="start" placeholder="Début YYYY-MM-DD" autocomplete="off">
+        <input id="end" placeholder="Fin YYYY-MM-DD" autocomplete="off">
+      </div>
+      <button style="margin-top:10px" onclick="importRange()">Importer période</button>
+
+      <div class="label">Résultat</div>
+      <div id="out" class="result">—</div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast">—</div>
+
+<script>
+const LS_KEY = "parites_mysql_cfg_v3";
+
+function toast(msg){
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(window.__t);
+  window.__t = setTimeout(()=>t.classList.remove("show"), 1600);
+}
+
+function animate(el){
+  el.classList.remove("fade");
+  void el.offsetWidth;
+  el.classList.add("fade");
+}
+
+function setOut(txt){
+  const out = document.getElementById("out");
+  out.textContent = txt;
+  animate(out);
+}
+
+function loadCfg(){
+  try{ return JSON.parse(localStorage.getItem(LS_KEY) || "{}"); }catch{ return {}; }
+}
+function saveCfg(cfg){
+  localStorage.setItem(LS_KEY, JSON.stringify(cfg));
+}
+
+function hydrateDbFields(){
+  const cfg = loadCfg();
+  const h = document.getElementById("db_host");
+  if(!h) return;
+  document.getElementById("db_host").value = cfg.host || "";
+  document.getElementById("db_port").value = cfg.port || "3306";
+  document.getElementById("db_user").value = cfg.user || "";
+  document.getElementById("db_pass").value = cfg.password || "";
+  document.getElementById("db_name").value = cfg.database || "prod_commun";
+}
+
+function readDbCfg(){
+  const h = document.getElementById("db_host");
+  if(!h) return loadCfg();
+  const cfg = {
+    host: h.value.trim(),
+    port: document.getElementById("db_port").value.trim() || "3306",
+    user: document.getElementById("db_user").value.trim(),
+    password: document.getElementById("db_pass").value,
+    database: document.getElementById("db_name").value.trim()
+  };
+  saveCfg(cfg);
+  return cfg;
+}
+
+async function loadMeta(){
+  const res = await fetch("/api/meta");
+  const data = await res.json();
+  document.getElementById("refIso").textContent = data.ref_iso || "EUR";
+}
+
+async function loadSymbols(){
+  const res = await fetch("/api/symbols");
+  const data = await res.json();
+  const targetSel = document.getElementById("target");
+  const keys = Object.keys(data).sort();
+  targetSel.innerHTML = "";
+  for(const k of keys){
+    const opt = document.createElement("option");
+    opt.value = k;
+    opt.textContent = `${k} — ${data[k]}`;
+    targetSel.appendChild(opt);
+  }
+  targetSel.value = "USD";
+}
+
+async function ensureSchema(){
+  setOut("Schéma…");
+  toast("Schéma…");
+  const payload = { db: readDbCfg() };
+
+  const res = await fetch("/api/ensure_schema", {
+    method:"POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if(!res.ok){
+    setOut(data.detail || "Erreur");
+    toast("Erreur");
+    return;
+  }
+  setOut("OK");
+  toast("OK");
+}
+
+async function importDay(){
+  setOut("Import…");
+  toast("Import…");
+  const payload = {
+    db: readDbCfg(),
+    target: document.getElementById("target").value,
+    date: document.getElementById("day").value.trim()
+  };
+
+  const res = await fetch("/api/import_day", {
+    method:"POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if(!res.ok){
+    setOut(data.detail || "Erreur");
+    toast("Erreur");
+    return;
+  }
+  setOut(`OK\nDevise: ${data.target} → ${data.ref}\nPARITES_CODE: ${data.parites_code}\nLignes upsert: ${data.rows}`);
+  toast("OK");
+}
+
+async function importRange(){
+  setOut("Import…");
+  toast("Import…");
+  const payload = {
+    db: readDbCfg(),
+    target: document.getElementById("target").value,
+    start: document.getElementById("start").value.trim(),
+    end: document.getElementById("end").value.trim()
+  };
+
+  const res = await fetch("/api/import_range", {
+    method:"POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if(!res.ok){
+    setOut(data.detail || "Erreur");
+    toast("Erreur");
+    return;
+  }
+  setOut(`OK\nDevise: ${data.target} → ${data.ref}\nPARITES_CODE: ${data.parites_code}\nPériode: ${data.from} → ${data.to}\nLignes upsert: ${data.rows}`);
+  toast("OK");
+}
+
+hydrateDbFields();
+loadMeta().catch(()=>{});
+loadSymbols().catch(()=>setOut("Impossible de charger les devises."));
+</script>
+</body>
+</html>
