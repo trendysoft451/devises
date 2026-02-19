@@ -18,10 +18,10 @@ templates = Jinja2Templates(directory=os.path.join(APP_DIR, "templates"))
 APILAYER_KEY = os.getenv("APILAYER_KEY", "")
 APILAYER_BASE_URL = os.getenv("APILAYER_BASE_URL", "https://api.apilayer.com/exchangerates_data")
 
-# Base de conversion (fixée côté serveur, non modifiable dans l'UI)
-BASE_ISO = os.getenv("BASE_ISO", "EUR")
+# Base de conversion fixée côté serveur (non modifiable dans l'UI)
+BASE_ISO = os.getenv("BASE_ISO", "EUR").strip().upper()
 
-app = FastAPI(title="Parités Jour", version="1.0")
+app = FastAPI(title="Parités Jour", version="1.1")
 
 # Static (optionnel) — ne plante pas si absent
 STATIC_DIR = os.path.join(APP_DIR, "static")
@@ -66,7 +66,7 @@ PARITES_DICT: Dict[str, Tuple[str, str]] = {
 # =========================
 def _must_have_apilayer():
     if not APILAYER_KEY:
-        raise RuntimeError("APILAYER_KEY manquant (Render env var).")
+        raise RuntimeError("APILAYER_KEY manquant (variable d'environnement).")
 
 def _safe_iso(code: str) -> str:
     code = (code or "").strip().upper()
@@ -125,10 +125,10 @@ def _connect_mysql(cfg: Dict[str, Any]):
         raise HTTPException(status_code=502, detail=f"Connexion MySQL impossible: {str(e)[:180]}")
 
 # =========================
-# DB schema + seed
+# DB schema
 # =========================
 def _ensure_tables(conn):
-    ddl_parites = '''
+    ddl_parites = """
     CREATE TABLE IF NOT EXISTS parites (
       PARITES_CODE CHAR(1)      NOT NULL,
       PARITES_ISO  CHAR(3)      NOT NULL,
@@ -136,8 +136,8 @@ def _ensure_tables(conn):
       PRIMARY KEY (PARITES_CODE),
       UNIQUE KEY uq_parites_iso (PARITES_ISO)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    '''
-    ddl_parites_jour = '''
+    """
+    ddl_parites_jour = """
     CREATE TABLE IF NOT EXISTS parites_jour (
       PARITES_CODE          CHAR(1)       NOT NULL,
       PARITES_JOUR_DATE     DATE          NOT NULL,
@@ -148,40 +148,42 @@ def _ensure_tables(conn):
         FOREIGN KEY (PARITES_CODE) REFERENCES parites(PARITES_CODE)
           ON UPDATE RESTRICT ON DELETE RESTRICT
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    '''
+    """
     with conn.cursor() as cur:
         cur.execute(ddl_parites)
         cur.execute(ddl_parites_jour)
 
-def _seed_parites_if_needed(conn):
-    sql = "INSERT IGNORE INTO parites (PARITES_CODE, PARITES_ISO, PARITES_LIB) VALUES (%s, %s, %s);"
-    rows = [(code, iso, lib) for iso, (lib, code) in PARITES_DICT.items()]
-    with conn.cursor() as cur:
-        cur.executemany(sql, rows)
-
-def _parites_code_for_iso(target_iso: str) -> str:
+def _ensure_parites_row_for_target(conn, target_iso: str) -> str:
+    """
+    Crée uniquement la devise sélectionnée dans PARITES (si absente).
+    Ne rien faire si PARITES_CODE existe déjà.
+    Retourne PARITES_CODE (1 caractère).
+    """
     iso = _safe_iso(target_iso)
     if iso not in PARITES_DICT:
         raise HTTPException(status_code=400, detail=f"Devise {iso} non supportée (pas de mapping PARITES_CODE).")
-    return PARITES_DICT[iso][1]
 
-def _ensure_parites_code_exists(conn, target_iso: str) -> str:
-    _seed_parites_if_needed(conn)
-    code = _parites_code_for_iso(target_iso)
+    lib, code = PARITES_DICT[iso]
+
     with conn.cursor() as cur:
+        cur.execute(
+            "INSERT IGNORE INTO parites (PARITES_CODE, PARITES_ISO, PARITES_LIB) VALUES (%s, %s, %s);",
+            (code, iso, lib),
+        )
         cur.execute("SELECT PARITES_CODE FROM parites WHERE PARITES_CODE=%s LIMIT 1;", (code,))
         if not cur.fetchone():
             raise HTTPException(status_code=500, detail=f"PARITES_CODE {code} introuvable en base.")
+
     return code
 
 def _upsert_parites_jour(conn, rows: List[Dict[str, Any]]):
-    sql = '''
+    sql = """
     INSERT INTO parites_jour (PARITES_CODE, PARITES_JOUR_DATE, PARITES_JOUR_TAUX, PARITES_JOUR_TAUX_DIV)
     VALUES (%s, %s, %s, %s)
     ON DUPLICATE KEY UPDATE
       PARITES_JOUR_TAUX=VALUES(PARITES_JOUR_TAUX),
       PARITES_JOUR_TAUX_DIV=VALUES(PARITES_JOUR_TAUX_DIV);
-    '''
+    """
     with conn.cursor() as cur:
         cur.executemany(sql, [(r["code"], r["date"], r["rate"], r["rate_div"]) for r in rows])
 
@@ -189,6 +191,7 @@ def _upsert_parites_jour(conn, rows: List[Dict[str, Any]]):
 # Apilayer fetch
 # =========================
 def _get_supported_symbols() -> Dict[str, str]:
+    # /symbols -> filtre selon PARITES_DICT
     data = _apilayer_get("symbols", {})
     symbols = data.get("symbols")
     if not isinstance(symbols, dict):
@@ -256,7 +259,6 @@ async def api_ensure_schema(payload: Dict[str, Any]):
     conn = _connect_mysql(db)
     try:
         _ensure_tables(conn)
-        _seed_parites_if_needed(conn)
         conn.commit()
     except HTTPException:
         conn.rollback()
@@ -280,7 +282,7 @@ async def api_import_day(payload: Dict[str, Any]):
     conn = _connect_mysql(db)
     try:
         _ensure_tables(conn)
-        parites_code = _ensure_parites_code_exists(conn, target)
+        parites_code = _ensure_parites_row_for_target(conn, target)
 
         rows: List[Dict[str, Any]] = []
         for d, rate in rates.items():
@@ -316,7 +318,7 @@ async def api_import_range(payload: Dict[str, Any]):
     conn = _connect_mysql(db)
     try:
         _ensure_tables(conn)
-        parites_code = _ensure_parites_code_exists(conn, target)
+        parites_code = _ensure_parites_row_for_target(conn, target)
 
         rows: List[Dict[str, Any]] = []
         for d in sorted(rates.keys()):
@@ -337,4 +339,12 @@ async def api_import_range(payload: Dict[str, Any]):
     finally:
         conn.close()
 
-    return {"ok": True, "base": BASE_ISO, "target": target, "parites_code": parites_code, "rows": len(rows), "from": start.isoformat(), "to": end.isoformat()}
+    return {
+        "ok": True,
+        "base": BASE_ISO,
+        "target": target,
+        "parites_code": parites_code,
+        "rows": len(rows),
+        "from": start.isoformat(),
+        "to": end.isoformat(),
+    }
