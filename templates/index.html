@@ -89,9 +89,6 @@
       transition:220ms cubic-bezier(.2,.8,.2,1); pointer-events:none;
     }
     .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
-    .muted{color:var(--muted);font-size:13px}
-    .hint{color:var(--muted);font-size:12px;margin-top:6px}
-    .danger{color:var(--danger)}
   </style>
 </head>
 <body>
@@ -104,14 +101,14 @@
 
     <div class="card">
       {% if is_admin_ui %}
-        <div class="label">Connexion MySQL (mémorisée sur cet appareil)</div>
+        <div class="label">Connexion MySQL</div>
         <div class="grid">
           <input id="db_host" placeholder="Serveur (host)" autocomplete="off">
           <input id="db_port" placeholder="Port (3306)" inputmode="numeric" autocomplete="off">
           <input id="db_user" placeholder="Utilisateur" autocomplete="off">
           <input id="db_pass" placeholder="Mot de passe" type="password" autocomplete="off">
           <input id="db_name" placeholder="Base (ex: prod_commun)" autocomplete="off">
-          <div class="muted">Stockage local (localStorage). Utilise un compte DB à droits limités.</div>
+          <div></div>
         </div>
         <button style="margin-top:10px" onclick="ensureSchema()">Créer/Mettre à jour le schéma</button>
         <div class="divider"></div>
@@ -122,7 +119,6 @@
         <select id="target"></select>
         <button onclick="importDay()">Importer (jour)</button>
       </div>
-      <div class="hint">PARITES est créé/seed automatiquement lors des imports (si besoin).</div>
 
       <div class="divider"></div>
 
@@ -141,16 +137,13 @@
 
       <div class="label">Résultat</div>
       <div id="out" class="result">—</div>
-      {% if not is_admin_ui %}
-        <div class="hint danger">Ouvre <b>/?admin=1</b> pour saisir la connexion DB et créer le schéma.</div>
-      {% endif %}
     </div>
   </div>
 
   <div id="toast" class="toast">—</div>
 
 <script>
-const LS_KEY = "parites_mysql_cfg_v1";
+const LS_KEY = "parites_mysql_cfg_v2";
 
 function toast(msg){
   const t = document.getElementById("toast");
@@ -192,7 +185,7 @@ function hydrateDbFields(){
 
 function readDbCfg(){
   const h = document.getElementById("db_host");
-  if(!h) return loadCfg(); // non-admin: utilise les valeurs mémorisées
+  if(!h) return loadCfg(); // mode non-admin : utilise les valeurs mémorisées
   const cfg = {
     host: h.value.trim(),
     port: document.getElementById("db_port").value.trim() || "3306",
@@ -226,7 +219,7 @@ async function loadSymbols(){
 }
 
 async function ensureSchema(){
-  setOut("Création/maj du schéma…");
+  setOut("Schéma…");
   toast("Schéma…");
   const payload = { db: readDbCfg() };
 
@@ -241,12 +234,12 @@ async function ensureSchema(){
     toast("Erreur");
     return;
   }
-  setOut("OK — tables PARITES et PARITES_JOUR prêtes.");
+  setOut("OK");
   toast("OK");
 }
 
 async function importDay(){
-  setOut("Import jour…");
+  setOut("Import…");
   toast("Import…");
   const payload = {
     db: readDbCfg(),
@@ -270,7 +263,7 @@ async function importDay(){
 }
 
 async function importRange(){
-  setOut("Import période…");
+  setOut("Import…");
   toast("Import…");
   const payload = {
     db: readDbCfg(),
@@ -296,7 +289,7 @@ async function importRange(){
 
 hydrateDbFields();
 loadMeta().catch(()=>{});
-loadSymbols().catch(()=>setOut("Impossible de charger /api/symbols (vérifie APILAYER_KEY)."));
+loadSymbols().catch(()=>setOut("Impossible de charger les devises."));
 </script>
 </body>
 </html>
