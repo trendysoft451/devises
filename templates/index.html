@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Import des devisesr</title>
+  <title>Import des devises</title>
 
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Parités Jour">
@@ -94,8 +94,8 @@
 <body>
   <div class="wrap">
     <div class="header">
-      <h1>Parités Jour</h1>
-      <div class="sub">Taux : Devise → EUR</div>
+      <h1>Import Devises</h1>
+      <div class="sub">Récupère le taux de change des devises du jour ou un historique dur une période</div>
       <div class="pill">Référence: <b id="refIso">—</b></div>
     </div>
 
@@ -110,7 +110,7 @@
           <input id="db_name" placeholder="Base (ex: prod_commun)" autocomplete="off">
           <div></div>
         </div>
-        <button style="margin-top:10px" onclick="ensureSchema()">Créer/Mettre à jour le schéma</button>
+        <button style="margin-top:10px" onclick="ensureSchema()">Enregister</button>
         <div class="divider"></div>
       {% endif %}
 
@@ -128,7 +128,7 @@
         <button onclick="importDay()">Importer</button>
       </div>
 
-      <div class="label">Import sur période</div>
+      <div class="label">Import historique sur une période de 365 jours maximum</div>
       <div class="row">
         <input id="start" placeholder="Début YYYY-MM-DD" autocomplete="off">
         <input id="end" placeholder="Fin YYYY-MM-DD" autocomplete="off">
