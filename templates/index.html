@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Parités Jour</title>
+  <title>Import des devisesr</title>
 
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Parités Jour">
@@ -101,11 +101,11 @@
 
     <div class="card">
       {% if is_admin_ui %}
-        <div class="label">Connexion MySQL</div>
+        <div class="label">Connexion Base</div>
         <div class="grid">
           <input id="db_host" placeholder="Serveur (host)" autocomplete="off">
           <input id="db_port" placeholder="Port (3306)" inputmode="numeric" autocomplete="off">
-          <input id="db_user" placeholder="Utilisateur" autocomplete="off">
+          <input id="db_user" placeholder="Utilisateur (mettre root)" autocomplete="off">
           <input id="db_pass" placeholder="Mot de passe" type="password" autocomplete="off">
           <input id="db_name" placeholder="Base (ex: prod_commun)" autocomplete="off">
           <div></div>
@@ -117,12 +117,12 @@
       <div class="label">Devise à importer</div>
       <div class="row">
         <select id="target"></select>
-        <button onclick="importDay()">Importer (jour)</button>
+        <button onclick="importDay()">Importer la devise au taux du jour</button>
       </div>
 
       <div class="divider"></div>
 
-      <div class="label">Import du jour</div>
+      <div class="label">Importer tous les taux des devises du jour</div>
       <div class="row">
         <input id="day" placeholder="YYYY-MM-DD (optionnel)" autocomplete="off">
         <button onclick="importDay()">Importer</button>
